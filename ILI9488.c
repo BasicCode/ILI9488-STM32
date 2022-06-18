@@ -272,7 +272,7 @@ void lcd_init_command_list(void)
 	lcd_write_command(0xB0); //Interface Mode Control
 	lcd_write_data(0x80); //SDO not in use
 	lcd_write_command(0xB1); //Frame rate 70HZ
-	lcd_write_data(0x00); //Was 0xB0
+	lcd_write_data(0x00); //
 	lcd_write_data(0x10);
 	lcd_write_command(0xB4);
 	lcd_write_data(0x02);
@@ -437,6 +437,11 @@ void draw_fast_char(unsigned int x, unsigned int y, char c, unsigned int colour,
     char height = 13;
     unsigned int font_index = (c - 32);
     unsigned int this_px = bg_colour;
+    //If the buffer is too small to fit a full character then we have to write each pixel
+    int smallBuffer = 0;
+    if(V_BUFFER_SIZE < height * width) {
+    	smallBuffer++;
+    }
 
     //Set the drawing region
     set_draw_window(x, y, x + width - 1, y + height);
@@ -457,14 +462,20 @@ void draw_fast_char(unsigned int x, unsigned int y, char c, unsigned int colour,
 			if((line >> (j)) & 0x01)
 				this_px = colour;
 
-            //Draw this pixel
+            //DCreate the bitmap in the frame buffer
 		    v_buffer[buffer_counter++] = (this_px >> 8) & 0xF8;
 		    v_buffer[buffer_counter++] = (this_px >> 3) & 0xFC;
 		    v_buffer[buffer_counter++] = (this_px << 3);
-        	write_buffer();
+
+		    //If the buffer was too small for a full font then write each pixel
+		    if(smallBuffer)
+		    	write_buffer();
         }
     }
 
+    //Write the vram buffer to the display
+    if(!smallBuffer)
+    	write_buffer();
 
     //Return CS to high
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
@@ -535,8 +546,8 @@ void draw_bitmap(unsigned int x1, unsigned int y1, int scale, const unsigned int
 		for (int sv = 0; sv < scale; sv++) {
 			for (int j = 0; j <= width; j++) {
 				//Choose which byte to display depending on the screen orientation
-				//NOTE: We add a byte because of the first two bytes being dimension data in the array
-				this_byte = bmp[(width * (i)) + j + 1];
+				//NOTE: We add 2 bytes because of the first two bytes being dimension data in the array
+				this_byte = bmp[(width * (i)) + j + 2];
 
 				//And this loop does the horizontal axis scale (three bytes per pixel))
 				for (int sh = 0; sh < scale; sh++) {

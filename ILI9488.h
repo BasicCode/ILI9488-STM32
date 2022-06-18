@@ -17,8 +17,8 @@
 extern SPI_HandleTypeDef hspi2;
 
 //Hard-coded dimensions of the display
-#define WIDTH       480 //480
-#define HEIGHT      320 //320
+#define WIDTH 480 //480
+#define HEIGHT 320 //320
 #define LANDSCAPE   1 //Portrait or Landscape orientation. Update WIDTH and HEIGHT above.
 
 //ILI9488 registers found at
