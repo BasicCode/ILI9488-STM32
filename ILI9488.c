@@ -15,15 +15,20 @@
 #include "font.h"
 
 /*
- * A little bit of video RAM to speed things up. This lets the HAL SPI library
- * transfer data in bulk rather than separate transactions.
+ * A little bit of video RAM to speed things up.
  * The minimum value is 3 (1 byte each for R, G, and B).
  * The theoretical maximum is 0xFFFF - 1 but that doesn't seem to work. Pick a
  * size that suits your RAM budget and works with your controller.
  */
-#define V_BUFFER_SIZE 0x3FFF
+#define V_BUFFER_SIZE 1024
 uint8_t v_buffer[V_BUFFER_SIZE];
+uint8_t v_buffer_1[V_BUFFER_SIZE];
+uint8_t v_buffer_2[V_BUFFER_SIZE];
 uint16_t buffer_counter = 0;
+uint16_t buffer_counter_1 = 0;
+uint16_t buffer_counter_2 = 0;
+uint8_t active_buffer = 0;
+uint8_t dma_transfer_in_progress = 0;
 
 /*
  * Writes a byte to SPI without changing chip select (CS) state.
@@ -31,33 +36,51 @@ uint16_t buffer_counter = 0;
  * control these pins as required.
  */
 void spi_write(unsigned char data) {
-	HAL_SPI_Transmit(&hspi2, &data, 1, 10);
+
+	//Check that the spi port is free
+	while(dma_transfer_in_progress);
+
 	while(HAL_SPI_GetState(&hspi2) != HAL_SPI_STATE_READY);
+
+	HAL_SPI_Transmit(&hspi2, &data, 1, 10);
 }
 
 /*
  * Writes the V-RAM buffer to the display.
- * TODO: currently only uses SPI.
  */
 void write_buffer() {
+
+	//Check that there isn't a DMA transfer in progress and that the device is free
+	while(dma_transfer_in_progress);
+
+	while(HAL_SPI_GetState(&hspi2) != HAL_SPI_STATE_READY);
+
 	HAL_SPI_Transmit(&hspi2, &v_buffer, buffer_counter, 10);
 	buffer_counter = 0;
 }
 
-/**
- * Writes data to an 8-bit parallel bus. This uses a (slow),
- * individual pin write mode just because the HAL libraries
- * don't offer a full port write.
- * If it suits your project you can use
- * GPIOx->ODR = data;
- * instead.
+void write_buffer_dma(unsigned char *buffer, int size) {
+
+	//Check if the DMA is busy
+	while(dma_transfer_in_progress);
+
+	//Set the DMA transfer flag to block overwriting
+	dma_transfer_in_progress = 1;
+
+    // Use DMA for SPI transmission
+    HAL_SPI_Transmit_DMA(&hspi2, buffer, size);
+
+}
+
+/*
+ * Callback for when the DMA transfer is complete.
+ * Clear the flag to allow the next transfer to begin.
  */
-void parallel_write(unsigned char data) {
-	//In this particular example I'm using PA5:PA12
-    HAL_GPIO_WritePin(WR_PORT, WR_PIN, GPIO_PIN_RESET);
-	GPIOA->ODR = (data << 5);
-	delay_ms(1);
-    HAL_GPIO_WritePin(WR_PORT, WR_PIN, GPIO_PIN_SET);
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
+    if (hspi->Instance == SPI2) {
+        // DMA transfer complete, ready for next buffer
+        dma_transfer_in_progress = 0;
+    }
 }
 
 /*
@@ -66,10 +89,9 @@ void parallel_write(unsigned char data) {
 void lcd_write_data(unsigned char data) {
     HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-    if(SPI_MODE)
-    	spi_write(data);
-	else
-		parallel_write(data);
+
+    spi_write(data);
+
     //HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
 }
@@ -80,54 +102,19 @@ void lcd_write_data(unsigned char data) {
 void lcd_write_command(unsigned char data) {
     HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-    if(SPI_MODE)
-    	spi_write(data);
-	else
-		parallel_write(data);
+
+    spi_write(data);
+
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
 }
 
 void lcd_write_reg(unsigned int data) {
     HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-    if(SPI_MODE)
-    	spi_write(data);
-	else
-		parallel_write(data);
+
+    spi_write(data);
+
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
-}
-
-/**
- * Read a number of bytes from teh display.
- */
-void lcd_read_bytes(int byteCount) {
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-	//Set the GPIO mode to INPUT
-	GPIO_InitStruct.Pin = LCD0_Pin|LCD1_Pin|LCD2_Pin|LCD3_Pin
-						  |LCD4_Pin|LCD5_Pin|LCD6_Pin|LCD7_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-	//Read each byte
-	while(byteCount--) {
-		HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-		HAL_GPIO_WritePin(RD_PORT, RD_PIN, GPIO_PIN_RESET);
-		delay_ms(10);
-		unsigned int data = GPIOA->IDR;
-		data = (data >> 5) & 0xFF;
-		HAL_GPIO_WritePin(RD_PORT, RD_PIN, GPIO_PIN_SET);
-	}
-
-    //Reset the GPIO mode to OUTPUT
-    GPIO_InitStruct.Pin = LCD0_Pin|LCD1_Pin|LCD2_Pin|LCD3_Pin
-                            |LCD4_Pin|LCD5_Pin|LCD6_Pin|LCD7_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 }
 
 /*
@@ -167,48 +154,6 @@ void delay_ms(double millis) {
  */
 void delay_us(long int cycles) {
     while(cycles--);
-}
-
-/*
- * Initialisation routine for the LCD
- * I got this from the one of the ebay sellers which make them.
- * From Open-Smart
- */
-void lcd_init_parallel() {
-
-    //SET control pins for the LCD HIGH (they are active LOW)
-    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_SET); //RESET pin HIGH (Active LOW)
-    HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET); //Chip Select Active LOW
-    HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET); //Data / Command select Active LOW
-    HAL_GPIO_WritePin(RD_PORT, RD_PIN, GPIO_PIN_SET); //READ pin HIGH (active LOW)
-    HAL_GPIO_WritePin(WR_PORT, WR_PIN, GPIO_PIN_SET); //WRITE pin HIGH (active LOW)
-    //Cycle reset pin
-    delay_ms(100);
-    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_RESET);
-    HAL_Delay(100);
-    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_SET);
-    HAL_Delay(100);
-
-    lcd_init_command_list();
-
-}
-/*
- * Same as above, but initialises with an SPI port instead.
- */
-void lcd_init_spi() {
-    //SET control pins for the LCD HIGH (they are active LOW)
-    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_SET); //RESET pin HIGH (Active LOW)
-    HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET); //Chip Select Active LOW
-    HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET); //Data / Command select Active LOW
-    //Cycle reset pin
-    HAL_Delay(100);
-    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_RESET);
-    HAL_Delay(500);
-    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_SET);
-    HAL_Delay(500);
-
-    lcd_init_command_list();
-
 }
 
 /**
@@ -290,11 +235,30 @@ void lcd_init_command_list(void)
 	lcd_write_data(0x82);
 	lcd_write_command(0x11);
 	HAL_Delay(120);
-	lcd_write_command(0x21);
+	lcd_write_command(0x21); //Invert display - channge this if your colours are innverted
 
 
 	HAL_Delay(120);
 	lcd_write_command(0x29);
+}
+
+/*
+ * Same as above, but initialises with an SPI port instead.
+ */
+void lcd_init() {
+    //SET control pins for the LCD HIGH (they are active LOW)
+    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_SET); //RESET pin HIGH (Active LOW)
+    HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET); //Chip Select Active LOW
+    HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET); //Data / Command select Active LOW
+    //Cycle reset pin
+    HAL_Delay(100);
+    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_RESET);
+    HAL_Delay(500);
+    HAL_GPIO_WritePin(RESX_PORT, RESX_PIN, GPIO_PIN_SET);
+    HAL_Delay(500);
+
+    lcd_init_command_list();
+
 }
 
 /*
@@ -358,7 +322,7 @@ void fill_rectangle(unsigned int x1, unsigned int y1, unsigned int x2, unsigned 
 
 
     //Set the drawing region
-    set_draw_window(x1, y1, x2, y2);
+    set_draw_window(x1, y1, x2 - 1, y2);
 
     //We will do the SPI write manually here for speed
     //( the data sheet says it doesn't matter if CS changes between
@@ -369,23 +333,47 @@ void fill_rectangle(unsigned int x1, unsigned int y1, unsigned int x2, unsigned 
 
 
     //Write colour to each pixel
-    for(int y = 0; y < y2-y1+1 ; y++) {
-        for(int x = 0; x < x2-x1+1; x++) {
-		    v_buffer[buffer_counter] = r;
-		    buffer_counter++;
-		    v_buffer[buffer_counter] = g;
-		    buffer_counter++;
-		    v_buffer[buffer_counter] = b;
-		    buffer_counter++;
+    for(int y = 0; y < y2 - y1 ; y++) {
+        for(int x = 0; x < x2 - x1 ; x++) {
+			if (active_buffer) {
+				v_buffer_1[buffer_counter_1++] = r;
+				v_buffer_1[buffer_counter_1++] = g;
+				v_buffer_1[buffer_counter_1++] = b;
 
-			//If the buffer is full then send it to the dispaly
-			if(buffer_counter > V_BUFFER_SIZE - 3) {
-				write_buffer();
+				// If first buffer is full, start DMA transmission and switch buffers
+				if (buffer_counter_1 > V_BUFFER_SIZE - 3) {
+					write_buffer_dma(v_buffer_1, buffer_counter_1);
+					buffer_counter_1 = 0;
+					active_buffer = 0; // Switch to second buffer
+				}
+			} else {
+				v_buffer_2[buffer_counter_2++] = r;
+				v_buffer_2[buffer_counter_2++] = g;
+				v_buffer_2[buffer_counter_2++] = b;
+
+				// If second buffer is full, start DMA transmission and switch buffers
+				if (buffer_counter_2 > V_BUFFER_SIZE - 3) {
+					write_buffer_dma(v_buffer_2, buffer_counter_2);
+					buffer_counter_2 = 0;
+					active_buffer = 1; // Switch back to first buffer
+				}
 			}
         }
     }
-    //Send the remaining bytes
-	write_buffer();
+
+    // Send remaining bytes in the active buffer
+    if (active_buffer) {
+        write_buffer_dma(v_buffer_1, buffer_counter_1);
+    } else {
+        write_buffer_dma(v_buffer_2, buffer_counter_2);
+    }
+
+    //Reset the buffers
+	buffer_counter_1 = 0;
+	buffer_counter_2 = 0;
+    //Wait for the DMA transfer to finish before pulling CS High
+    while(dma_transfer_in_progress);
+
     //Return CS to high
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
 }
@@ -521,59 +509,81 @@ void draw_fast_string(unsigned int x, unsigned int y, unsigned int colour, unsig
 
 /*
  * Draws a bitmap by directly writing the byte stream to the LCD.
- *
- * So the scaling is done strangely here because writing individual pixels
- * has an overhead of 26 bytes each.
  */
 void draw_bitmap(unsigned int x1, unsigned int y1, int scale, const unsigned int *bmp) {
-	int width = bmp[0];
-	int height = bmp[1];
-	unsigned int this_byte;
-	int x2 = x1 + (width * scale);
-	int y2 = y1 + (height * scale);
+    uint16_t width = bmp[0];
+    uint16_t height = bmp[1];
+    uint16_t this_byte;
+    uint16_t x2 = x1 + (width * scale);
+    uint16_t y2 = y1 + (height * scale);
 
-	//Set the drawing region
-	set_draw_window(x1, y1, x2 + scale - 1, y2);
+	unsigned char r;
+	unsigned char g;
+	unsigned char b;
 
-	//We will do the SPI write manually here for speed
-    HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);
-	//CS low to begin data
-    HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
+    // Set the drawing region
+    set_draw_window(x1, y1, x2 - 1, y2);
 
-	//Write colour to each pixel
-	for (int i = 0; i < height; i++) {
-		//this loop does the vertical axis scaling (two of each line))
-		for (int sv = 0; sv < scale; sv++) {
-			for (int j = 0; j <= width; j++) {
-				//Choose which byte to display depending on the screen orientation
-				//NOTE: We add 2 bytes because of the first two bytes being dimension data in the array
-				this_byte = bmp[(width * (i)) + j + 2];
+    // Prepare for SPI transmission
+    HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);  // Set DC pin for data
+    HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);  // Set CS pin low for SPI communication
+
+    // Write color to each pixel
+    for (int i = 0; i < height; i++) {
+        for (int sv = 0; sv < scale; sv++) {
+            for (int j = 0; j < width; j++) {
+                // Extract pixel data
+                this_byte = bmp[(width * i) + j + 2];
 
 				//And this loop does the horizontal axis scale (three bytes per pixel))
 				for (int sh = 0; sh < scale; sh++) {
 
-				    unsigned char r = (this_byte >> 8) & 0xF8;
-				    unsigned char g = (this_byte >> 3) & 0xFC;
-				    unsigned char b = (this_byte << 3);
-				    v_buffer[buffer_counter] = r;
-				    buffer_counter++;
-				    v_buffer[buffer_counter] = g;
-				    buffer_counter++;
-				    v_buffer[buffer_counter] = b;
-				    buffer_counter++;
+					//Convert 16-bit pixel to 18-bit for the display
+					r = (this_byte >> 8) & 0xF8;
+					g = (this_byte >> 3) & 0xFC;
+					b = (this_byte << 3);
 
-					//If the buffer is full then send it to the dispaly
-					if(buffer_counter > V_BUFFER_SIZE - 3) {
-						write_buffer();
+					if (active_buffer) {
+						v_buffer_1[buffer_counter_1++] = r;
+						v_buffer_1[buffer_counter_1++] = g;
+						v_buffer_1[buffer_counter_1++] = b;
+
+						// If first buffer is full, start DMA transmission and switch buffers
+						if (buffer_counter_1 > V_BUFFER_SIZE - 3) {
+							write_buffer_dma(v_buffer_1, buffer_counter_1);
+							buffer_counter_1 = 0;
+							active_buffer = 0; // Switch to second buffer
+						}
+					} else {
+						v_buffer_2[buffer_counter_2++] = r;
+						v_buffer_2[buffer_counter_2++] = g;
+						v_buffer_2[buffer_counter_2++] = b;
+
+						// If second buffer is full, start DMA transmission and switch buffers
+						if (buffer_counter_2 > V_BUFFER_SIZE - 3) {
+							write_buffer_dma(v_buffer_2, buffer_counter_2);
+							buffer_counter_2 = 0;
+							active_buffer = 1; // Switch back to first buffer
+						}
 					}
 				}
-			}
-		}
-	}
-	//Send the remaining bytes
-	write_buffer();
+            }
+        }
+    }
 
-	//Return CS to high
+    // Send remaining bytes in the active buffer
+    if (active_buffer) {
+        write_buffer_dma(v_buffer_1, buffer_counter_1);
+    } else {
+        write_buffer_dma(v_buffer_2, buffer_counter_2);
+    }
+
+    //Reset the buffers
+	buffer_counter_1 = 0;
+	buffer_counter_2 = 0;
+    //Wait for the DMA transfer to finish before pulling CS High
+    while(dma_transfer_in_progress);
+
+    // Return CS pin to high
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
-
 }

@@ -13,7 +13,6 @@
 //Set up any ports in your main.c file.
 #include "main.h"
 
-#define SPI_MODE 1 //Set mode 1 for serial / SPI mode, or 0 for parallel mode.
 extern SPI_HandleTypeDef hspi2;
 
 //Hard-coded dimensions of the display
@@ -126,43 +125,11 @@ extern SPI_HandleTypeDef hspi2;
 #define RESX_PIN	GPIO_PIN_14 //Reset pin
 #define	DC_PORT		GPIOB
 #define DC_PIN		GPIO_PIN_15 //DATA / Command select
-#define WR_PORT		GPIOB
-#define	WR_PIN		GPIO_PIN_4 //Write pin
-#define RD_PORT		GPIOB
-#define	RD_PIN		GPIO_PIN_3 //Read pin
-#define LCD0_Pin GPIO_PIN_5
-#define LCD0_GPIO_Port GPIOA
-#define LCD1_Pin GPIO_PIN_6
-#define LCD1_GPIO_Port GPIOA
-#define LCD2_Pin GPIO_PIN_7
-#define LCD2_GPIO_Port GPIOA
-#define LCD3_Pin GPIO_PIN_8
-#define LCD3_GPIO_Port GPIOA
-#define LCD4_Pin GPIO_PIN_9
-#define LCD4_GPIO_Port GPIOA
-#define LCD5_Pin GPIO_PIN_10
-#define LCD5_GPIO_Port GPIOA
-#define LCD6_Pin GPIO_PIN_11
-#define LCD6_GPIO_Port GPIOA
-#define LCD7_Pin GPIO_PIN_12
-#define LCD7_GPIO_Port GPIOA
 
-void spi_write(unsigned char data);
-void write_buffer();
-void parallel_write(unsigned char data);
-void lcd_write_command(unsigned char data);
-void lcd_write_data(unsigned char data);
-void lcd_write_reg(unsigned int data);
-void lcd_read_bytes(int byteCount);
-void lcd_init_parallel(void);
-void lcd_init_spi();
-void swap_int(unsigned int *num1, unsigned int *num2);
-void swap_char(char *num1, char *num2);
-void delay_ms(double millis);
-void delay_us(long int cycles);
-void lcd_init_command_list(void);
+
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi);
+void lcd_init();
 void draw_pixel(unsigned int x, unsigned int y, unsigned int colour);
-void set_draw_window(unsigned int row_start, unsigned int row_end, unsigned int col_start, unsigned int col_end);
 void fill_rectangle(unsigned int x1, unsigned int y1, unsigned int x2, unsigned int y2, unsigned int colour);
 void draw_char(unsigned int x, unsigned int y, char c, unsigned int colour, char size);
 void draw_fast_char(unsigned int x, unsigned int y, char c, unsigned int colour, unsigned int bg_colour);
